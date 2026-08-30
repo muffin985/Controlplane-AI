@@ -73,8 +73,9 @@ Being transparent about scope, since this is a proof-of-concept on illustrative 
 ## Repository structure
 
 ```
-/index.html   — the working prototype (single file, no build step)
-/README.md    — this file
+/index.html — the working prototype (single file, no build step)
+/README.md — this file
+/ControlPlane_Business_Proposal.docx — business proposal (problem framing, solution design, roadmap, risks)
 ```
 
 ## Team / Submission
