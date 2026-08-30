@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ControlPlane.ai — Live Risk Checker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0B0E14;
+    --panel:#131822;
+    --panel-2:#1B2230;
+    --border:#232B3A;
+    --text:#E8EBF0;
+    --muted:#7C8698;
+    --blue:#5B8DEF;
+    --amber:#F5A623;
+    --red:#FF5C5C;
+    --green:#3DDC97;
+    --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    --sans: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;
+  }
+  header{
+    padding:20px 28px; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;
+  }
+  .brand{display:flex; align-items:baseline; gap:12px;}
+  .brand h1{font-size:20px; margin:0; letter-spacing:0.02em;}
+  .brand h1 span{color:var(--blue);}
+  .brand .tag{color:var(--muted); font-size:13px; font-style:italic;}
+  .badge-live{
+    display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11px;
+    color:var(--green); border:1px solid var(--green); padding:4px 10px; border-radius:20px;
+  }
+  .dot{width:7px; height:7px; border-radius:50%; background:var(--green); animation:pulse 1.6s infinite;}
+  @keyframes pulse{0%{opacity:1;}50%{opacity:0.25;}100%{opacity:1;}}
+
+  main{
+    display:grid; grid-template-columns:340px 1fr 380px; gap:16px; padding:20px; align-items:start;
+  }
+  @media(max-width:1100px){ main{grid-template-columns:1fr;} }
+
+  .panel{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:18px;
+  }
+  .panel h2{
+    font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin:0 0 14px 0;
+    border-bottom:1px solid var(--border); padding-bottom:10px;
+  }
+  label{display:block; font-size:12px; color:var(--muted); margin:14px 0 6px;}
+  select, textarea, input[type=text]{
+    width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--text);
+    padding:8px 10px; border-radius:6px; font-family:var(--sans); font-size:13px; resize:vertical;
+  }
+  textarea{min-height:70px; font-family:var(--mono); font-size:12.5px; line-height:1.5;}
+  .btn{
+    width:100%; padding:10px; border-radius:6px; border:none; font-weight:600; font-size:13px;
+    cursor:pointer; margin-top:14px; transition:opacity .15s;
+  }
+  .btn:hover{opacity:0.85;}
+  .btn-primary{background:var(--blue); color:#0B0E14;}
+  .btn-secondary{background:transparent; border:1px solid var(--border); color:var(--text);}
+  .btn-small{width:auto; padding:5px 10px; font-size:11px; margin:0;}
+
+  .threshold-row{display:flex; align-items:center; gap:8px; margin-top:8px;}
+  .threshold-row input[type=range]{flex:1;}
+  .threshold-row span{font-family:var(--mono); font-size:11px; color:var(--muted); width:28px; text-align:right;}
+
+  .gauges{display:flex; gap:14px; margin-bottom:18px;}
+  .gauge{flex:1; background:var(--panel-2); border:1px solid var(--border); border-radius:8px; padding:12px; position:relative; overflow:hidden;}
+  .gauge .label{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em;}
+  .gauge .score{font-family:var(--mono); font-size:26px; font-weight:700; margin-top:4px;}
+  .gauge .bar-track{height:5px; background:#0B0E14; border-radius:4px; margin-top:10px; overflow:hidden;}
+  .gauge .bar-fill{height:100%; width:0%; transition:width .5s ease, background .5s ease;}
+  .gauge .detail{font-size:11px; color:var(--muted); margin-top:8px; line-height:1.4; min-height:28px;}
+  .scan-sweep{
+    position:absolute; top:0; left:-40%; width:40%; height:100%;
+    background:linear-gradient(90deg, transparent, rgba(91,141,239,0.18), transparent);
+    animation:sweep 1.1s linear;
+  }
+  @keyframes sweep{ from{left:-40%;} to{left:100%;} }
+
+  .decision-card{
+    border-radius:8px; padding:18px; border:1px solid var(--border); background:var(--panel-2);
+    display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+  }
+  .tier-badge{
+    font-family:var(--mono); font-size:22px; font-weight:800; padding:8px 18px; border-radius:6px; letter-spacing:0.04em;
+  }
+  .tier-LOW{background:rgba(61,220,151,0.12); color:var(--green); border:1px solid var(--green);}
+  .tier-MEDIUM{background:rgba(245,166,35,0.12); color:var(--amber); border:1px solid var(--amber);}
+  .tier-HIGH{background:rgba(255,92,92,0.12); color:var(--red); border:1px solid var(--red);}
+  .decision-text{flex:1; min-width:200px;}
+  .decision-text .action{font-size:15px; font-weight:600;}
+  .decision-text .overall{font-size:11px; color:var(--muted); font-family:var(--mono); margin-top:4px;}
+  .verifier-note{font-size:11px; color:var(--blue); margin-top:8px; font-style:italic;}
+
+  table{width:100%; border-collapse:collapse; font-size:11.5px;}
+  th{text-align:left; color:var(--muted); font-weight:500; padding:6px 4px; border-bottom:1px solid var(--border); font-size:10.5px; text-transform:uppercase;}
+  td{padding:6px 4px; border-bottom:1px solid var(--border); vertical-align:top; font-family:var(--mono);}
+  tr:last-child td{border-bottom:none;}
+  .tier-pill{padding:2px 7px; border-radius:10px; font-size:10px; font-weight:700;}
+  .audit-wrap{max-height:260px; overflow-y:auto; margin-top:4px;}
+  .override-btn{background:none; border:1px solid var(--border); color:var(--muted); font-family:var(--sans); font-size:10px; padding:2px 6px; border-radius:4px; cursor:pointer;}
+  .override-btn:hover{color:var(--text); border-color:var(--text);}
+  .override-row{display:none; background:var(--panel-2);}
+  .override-row.open{display:table-row;}
+  .override-row td{padding:8px 4px;}
+  .override-row select, .override-row input{font-size:11px; padding:4px 6px; margin-right:6px; width:auto; display:inline-block;}
+
+  .stat-row{display:flex; gap:10px; margin-top:10px;}
+  .stat-box{flex:1; background:var(--panel-2); border:1px solid var(--border); border-radius:6px; padding:10px; text-align:center;}
+  .stat-box .n{font-family:var(--mono); font-size:20px; font-weight:700;}
+  .stat-box .l{font-size:10px; color:var(--muted); text-transform:uppercase; margin-top:2px;}
+
+  .footnote{font-size:11px; color:var(--muted); margin-top:10px; line-height:1.5;}
+  canvas{max-width:100%;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>Control<span>Plane</span>.ai</h1>
+    <div class="tag">Finding it first — not finding out.</div>
+  </div>
+  <div class="badge-live"><span class="dot"></span> LIVE CHECKER — SIMULATED PIPELINE</div>
+</header>
+
+<main>
+  <!-- LEFT: Config -->
+  <div class="panel">
+    <h2>1 · Configure &amp; Submit</h2>
+
+    <label>AI Use Case</label>
+    <select id="useCase">
+      <option value="customer">Customer-Facing Chatbot (real-time)</option>
+      <option value="internal">Internal Copilot (near real-time)</option>
+      <option value="decision">Decision-Support, Regulated (async)</option>
+    </select>
+
+    <label>AI Response to Check</label>
+    <textarea id="responseInput" placeholder="Paste or type the AI-generated response here...">Our return policy guarantees a 100% refund within 90 days, no questions asked, and you can reach our billing team directly at jane.doe@company.com.</textarea>
+
+    <label>Source / Ground-Truth Document (optional — used for grounding check)</label>
+    <textarea id="sourceInput" placeholder="Paste the reference document the AI should be grounded in (leave blank to test the no-source heuristic)...">Our return policy allows refunds within 30 days for unused items, subject to manager approval.</textarea>
+
+    <button class="btn btn-primary" onclick="runSingleCheck()">▶ Run Live Check</button>
+    <button class="btn btn-secondary" onclick="runBatchDemo()">▶ Run Batch Demo (12 simulated interactions)</button>
+
+    <h2 style="margin-top:22px;">2 · Governance Policy Layer</h2>
+    <div id="policyControls"></div>
+    <div class="footnote">Adjust risk-appetite thresholds per use case. This is the configurable policy layer — the same detection scores can trigger different actions depending on how risk-tolerant a given deployment is.</div>
+  </div>
+
+  <!-- CENTER: Live checks + decision -->
+  <div>
+    <div class="panel" style="margin-bottom:16px;">
+      <h2>3 · Detection Layer (runs in parallel)</h2>
+      <div class="gauges">
+        <div class="gauge" id="gauge-perf">
+          <div class="label">Performance</div>
+          <div class="score" id="score-perf">--</div>
+          <div class="bar-track"><div class="bar-fill" id="bar-perf"></div></div>
+          <div class="detail" id="detail-perf">Awaiting check...</div>
+        </div>
+        <div class="gauge" id="gauge-cost">
+          <div class="label">Cost</div>
+          <div class="score" id="score-cost">--</div>
+          <div class="bar-track"><div class="bar-fill" id="bar-cost"></div></div>
+          <div class="detail" id="detail-cost">Awaiting check...</div>
+        </div>
+        <div class="gauge" id="gauge-resp">
+          <div class="label">Responsibility</div>
+          <div class="score" id="score-resp">--</div>
+          <div class="bar-track"><div class="bar-fill" id="bar-resp"></div></div>
+          <div class="detail" id="detail-resp">Awaiting check...</div>
+        </div>
+      </div>
+
+      <h2>4 · Decision Logic</h2>
+      <div class="decision-card">
+        <div class="tier-badge tier-LOW" id="tierBadge">—</div>
+        <div class="decision-text">
+          <div class="action" id="actionText">Run a check to see the tiered decision.</div>
+          <div class="overall" id="overallText"></div>
+          <div class="verifier-note" id="verifierNote"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>5 · Metrics &amp; Monitoring</h2>
+      <div class="stat-row">
+        <div class="stat-box"><div class="n" id="stat-total">0</div><div class="l">Checked</div></div>
+        <div class="stat-box"><div class="n" id="stat-low">0</div><div class="l">Low / Allowed</div></div>
+        <div class="stat-box"><div class="n" id="stat-med">0</div><div class="l">Medium / Flagged</div></div>
+        <div class="stat-box"><div class="n" id="stat-high">0</div><div class="l">High / Blocked</div></div>
+      </div>
+      <canvas id="distChart" height="110" style="margin-top:16px;"></canvas>
+      <h2 style="margin-top:18px;">Alert-Fatigue Tradeoff Simulator</h2>
+      <div class="footnote">Sweeps the flagging threshold across the batch results (run the batch demo first) and plots false positives vs. false negatives — the tuning tradeoff every real deployment has to make deliberately.</div>
+      <canvas id="tradeoffChart" height="110" style="margin-top:10px;"></canvas>
+    </div>
+  </div>
+
+  <!-- RIGHT: Audit trail -->
+  <div class="panel">
+    <h2>6 · Audit Trail &amp; Human Overrides</h2>
+    <div class="audit-wrap">
+      <table>
+        <thead><tr><th>Time</th><th>Use case</th><th>Tier</th><th>Action</th><th></th></tr></thead>
+        <tbody id="auditBody"></tbody>
+      </table>
+    </div>
+    <div class="footnote">Every decision is logged with full score breakdown. Reviewers can override any decision below — overrides feed the improvement loop (in a production system, these would retrain / recalibrate detection thresholds over time).</div>
+  </div>
+</main>
+
+<script>
+const STOPWORDS = new Set(['this','that','with','from','have','will','your','their','there','about','which','into','also','been','were','when','where','what','they','them','then','than','over','under','after','before','while','some','such','only','more','most','both','each','other','these','those','because','through']);
+
+const USE_CASES = {
+  customer:  { label:'Customer-Facing Chatbot', baselineTokens:22, weights:{performance:0.40, cost:0.15, responsibility:0.45}, thresholds:{medium:30, high:60} },
+  internal:  { label:'Internal Copilot',         baselineTokens:45, weights:{performance:0.30, cost:0.40, responsibility:0.30}, thresholds:{medium:35, high:65} },
+  decision:  { label:'Decision-Support (Regulated)', baselineTokens:60, weights:{performance:0.50, cost:0.10, responsibility:0.40}, thresholds:{medium:25, high:50} }
+};
+
+let auditLog = [];
+let batchResults = []; // {overall, trulyRisky}
+let auditCounter = 0;
+
+function tokenize(text){
+  return (text.toLowerCase().match(/[a-z0-9]{4,}/g) || []).filter(w => !STOPWORDS.has(w));
+}
+
+function checkGrounding(response, source){
+  if(!source || !source.trim()){
+    const assertive = (response.match(/\b\d+(\.\d+)?%?\b/g)||[]).length
+                     + (response.match(/\b(always|never|guaranteed|certainly|definitely|100%|proven|no questions asked)\b/gi)||[]).length;
+    const hedges = (response.match(/\b(may|might|could|approximately|around|likely|possibly|estimated?)\b/gi)||[]).length;
+    let risk = Math.max(15, Math.min(100, 25 + assertive*14 - hedges*10));
+    return { score: Math.round(risk), detail:`No source provided — scored via claim-assertiveness heuristic (${assertive} assertive marker(s), ${hedges} hedge(s)).` };
+  }
+  const respWords = tokenize(response);
+  const srcSet = new Set(tokenize(source));
+  let matched = 0;
+  respWords.forEach(w => { if(srcSet.has(w)) matched++; });
+  const overlap = respWords.length ? matched/respWords.length : 0;
+  const risk = Math.round((1-overlap)*100);
+  return { score: risk, detail:`Grounding overlap with source: ${(overlap*100).toFixed(0)}% of response content-words found in source.` };
+}
+
+function checkCost(response, useCase){
+  const tokens = response.trim().split(/\s+/).filter(Boolean).length;
+  const baseline = USE_CASES[useCase].baselineTokens;
+  const ratio = tokens / baseline;
+  let risk = ratio <= 1.3 ? Math.round(ratio*18) : Math.min(100, Math.round(22 + (ratio-1.3)*70));
+  return { score: Math.min(100,risk), detail:`${tokens} tokens vs. ${baseline}-token baseline for this use case (${Math.round(ratio*100)}% of typical volume).` };
+}
+
+function checkResponsibility(response){
+  const piiPatterns = [
+    {name:'Email address', re:/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/},
+    {name:'Phone number', re:/\b(\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/},
+    {name:'SSN-pattern', re:/\b\d{3}-\d{2}-\d{4}\b/},
+    {name:'Card-number pattern', re:/\b(?:\d[ -]*?){13,16}\b/}
+  ];
+  const found = piiPatterns.filter(p => p.re.test(response)).map(p=>p.name);
+  // Substring keywords (not full phrases) so variants like "guarantees a cure" and
+  // "guaranteed to work" both match "guarantee". Weighted higher than a single PII hit
+  // because unsafe/discriminatory claims and stereotyping should escalate at least as
+  // hard as a data leak, not trail behind it.
+  const policyTerms = ['guarantee','100%','never fails','no side effect','always approved','everyone knows','those people','obviously inferior','no questions asked'];
+  const lower = response.toLowerCase();
+  const hits = policyTerms.filter(t => lower.includes(t));
+  let risk = Math.min(100, found.length*40 + hits.length*50);
+  let detail = [];
+  if(found.length) detail.push(`PII detected: ${found.join(', ')}`);
+  if(hits.length) detail.push(`Sensitive phrasing: "${hits.join('", "')}"`);
+  if(!detail.length) detail.push('No PII or flagged phrasing detected.');
+  return { score: risk, detail: detail.join(' — ') };
+}
+
+function scoreColor(score){
+  if(score < 33) return 'var(--green)';
+  if(score < 66) return 'var(--amber)';
+  return 'var(--red)';
+}
+
+function runCheckLogic(useCase, response, source){
+  const perf = checkGrounding(response, source);
+  const cost = checkCost(response, useCase);
+  const resp = checkResponsibility(response);
+  const w = USE_CASES[useCase].weights;
+  const overall = Math.round(perf.score*w.performance + cost.score*w.cost + resp.score*w.responsibility);
+  const th = USE_CASES[useCase].thresholds;
+  let tier, action, borderline = false;
+  if(overall < th.medium){ tier='LOW'; action='Log silently — response allowed through.'; }
+  else if(overall < th.high){ tier='MEDIUM'; action='Auto-flag for reviewer / auto-redact before delivery.'; borderline = true; }
+  else { tier='HIGH'; action='Block response — escalate to a human reviewer.'; }
+  return { perf, cost, resp, overall, tier, action, borderline };
+}
+
+function renderPolicyControls(){
+  const el = document.getElementById('policyControls');
+  el.innerHTML = '';
+  Object.entries(USE_CASES).forEach(([key, cfg])=>{
+    const div = document.createElement('div');
+    div.innerHTML = `
+      <label>${cfg.label} — Medium threshold: <span id="${key}-med-val">${cfg.thresholds.medium}</span></label>
+      <div class="threshold-row"><input type="range" min="5" max="95" value="${cfg.thresholds.medium}" id="${key}-med"></div>
+      <label>${cfg.label} — High threshold: <span id="${key}-high-val">${cfg.thresholds.high}</span></label>
+      <div class="threshold-row"><input type="range" min="10" max="99" value="${cfg.thresholds.high}" id="${key}-high"></div>
+    `;
+    el.appendChild(div);
+  });
+  Object.keys(USE_CASES).forEach(key=>{
+    document.getElementById(key+'-med').addEventListener('input', e=>{
+      USE_CASES[key].thresholds.medium = parseInt(e.target.value);
+      document.getElementById(key+'-med-val').textContent = e.target.value;
+    });
+    document.getElementById(key+'-high').addEventListener('input', e=>{
+      USE_CASES[key].thresholds.high = parseInt(e.target.value);
+      document.getElementById(key+'-high-val').textContent = e.target.value;
+    });
+  });
+}
+
+function applyGaugeUI(prefix, result){
+  document.getElementById('score-'+prefix).textContent = result.score;
+  document.getElementById('score-'+prefix).style.color = scoreColor(result.score);
+  const bar = document.getElementById('bar-'+prefix);
+  bar.style.width = result.score + '%';
+  bar.style.background = scoreColor(result.score);
+  document.getElementById('detail-'+prefix).textContent = result.detail;
+  const gauge = document.getElementById('gauge-'+prefix);
+  const sweep = document.createElement('div');
+  sweep.className = 'scan-sweep';
+  gauge.appendChild(sweep);
+  setTimeout(()=>sweep.remove(), 1200);
+}
+
+function logAudit(useCase, result, sourceLabel){
+  auditCounter++;
+  const id = 'row-' + auditCounter;
+  const time = new Date().toLocaleTimeString();
+  const rec = { id, time, useCase, result };
+  auditLog.unshift(rec);
+  const tbody = document.getElementById('auditBody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td>${time}</td>
+    <td>${USE_CASES[useCase].label.split(' ')[0]}</td>
+    <td><span class="tier-pill" style="background:${scoreColor(result.overall)}22; color:${scoreColor(result.overall)};">${result.tier}</span></td>
+    <td>${result.overall}</td>
+    <td><button class="override-btn" onclick="toggleOverride('${id}')">Override</button></td>
+  `;
+  const orow = document.createElement('tr');
+  orow.className = 'override-row';
+  orow.id = 'override-'+id;
+  orow.innerHTML = `<td colspan="5">
+    <select id="sel-${id}"><option>Approve as-is</option><option>Escalate further</option><option>Dismiss flag</option></select>
+    <input type="text" id="reason-${id}" placeholder="Reason (required for audit log)">
+    <button class="override-btn" onclick="saveOverride('${id}')">Save</button>
+  </td>`;
+  tbody.prepend(orow);
+  tbody.prepend(tr);
+  updateStats();
+}
+
+function toggleOverride(id){
+  document.getElementById('override-'+id).classList.toggle('open');
+}
+function saveOverride(id){
+  const decision = document.getElementById('sel-'+id).value;
+  const reason = document.getElementById('reason-'+id).value || '(no reason given)';
+  console.log(`[FEEDBACK LOOP] Audit ${id} overridden: ${decision} — "${reason}"`);
+  const cell = document.getElementById('override-'+id);
+  cell.innerHTML = `<td colspan="5" style="color:var(--muted); font-style:italic;">Logged: ${decision} — "${reason}"</td>`;
+}
+
+function updateStats(){
+  document.getElementById('stat-total').textContent = auditLog.length;
+  document.getElementById('stat-low').textContent = auditLog.filter(r=>r.result.tier==='LOW').length;
+  document.getElementById('stat-med').textContent = auditLog.filter(r=>r.result.tier==='MEDIUM').length;
+  document.getElementById('stat-high').textContent = auditLog.filter(r=>r.result.tier==='HIGH').length;
+  renderDistChart();
+}
+
+let distChart, tradeoffChart;
+function renderDistChart(){
+  const ctx = document.getElementById('distChart');
+  const data = [auditLog.filter(r=>r.result.tier==='LOW').length, auditLog.filter(r=>r.result.tier==='MEDIUM').length, auditLog.filter(r=>r.result.tier==='HIGH').length];
+  if(distChart) distChart.destroy();
+  distChart = new Chart(ctx, {
+    type:'bar',
+    data:{ labels:['Low','Medium','High'], datasets:[{ data, backgroundColor:['#3DDC97','#F5A623','#FF5C5C'] }]},
+    options:{ plugins:{legend:{display:false}, title:{display:true, text:'Risk tier distribution (this session)', color:'#7C8698'}}, scales:{ x:{ticks:{color:'#7C8698'}, grid:{color:'#232B3A'}}, y:{ticks:{color:'#7C8698'}, grid:{color:'#232B3A'}, beginAtZero:true} } }
+  });
+}
+
+function renderTradeoffChart(){
+  const ctx = document.getElementById('tradeoffChart');
+  if(!batchResults.length){ if(tradeoffChart) tradeoffChart.destroy(); return; }
+  const thresholds = [];
+  const fp = [], fn = [];
+  for(let t=5; t<=95; t+=5){
+    thresholds.push(t);
+    let f=0, m=0;
+    batchResults.forEach(r=>{
+      const flagged = r.overall >= t;
+      if(flagged && !r.trulyRisky) f++;
+      if(!flagged && r.trulyRisky) m++;
+    });
+    fp.push(f); fn.push(m);
+  }
+  if(tradeoffChart) tradeoffChart.destroy();
+  tradeoffChart = new Chart(ctx, {
+    type:'line',
+    data:{ labels:thresholds, datasets:[
+      {label:'False positives (over-flagging)', data:fp, borderColor:'#F5A623', backgroundColor:'transparent', tension:0.3},
+      {label:'False negatives (missed risk)', data:fn, borderColor:'#FF5C5C', backgroundColor:'transparent', tension:0.3}
+    ]},
+    options:{ plugins:{legend:{labels:{color:'#7C8698', font:{size:10}}}}, scales:{ x:{title:{display:true,text:'Flagging threshold',color:'#7C8698'}, ticks:{color:'#7C8698'}, grid:{color:'#232B3A'}}, y:{ticks:{color:'#7C8698'}, grid:{color:'#232B3A'}, beginAtZero:true} } }
+  });
+}
+
+function runSingleCheck(){
+  const useCase = document.getElementById('useCase').value;
+  const response = document.getElementById('responseInput').value;
+  const source = document.getElementById('sourceInput').value;
+  if(!response.trim()){ alert('Paste an AI response to check first.'); return; }
+  const result = runCheckLogic(useCase, response, source);
+
+  applyGaugeUI('perf', result.perf);
+  applyGaugeUI('cost', result.cost);
+  applyGaugeUI('resp', result.resp);
+
+  const badge = document.getElementById('tierBadge');
+  badge.textContent = result.tier;
+  badge.className = 'tier-badge tier-' + result.tier;
+  document.getElementById('actionText').textContent = result.action;
+  document.getElementById('overallText').textContent = `Weighted overall risk score: ${result.overall}/100 · ${USE_CASES[useCase].label}`;
+
+  const note = document.getElementById('verifierNote');
+  if(result.borderline){
+    note.textContent = 'Borderline score — in production this triggers a heavier secondary "AI-as-judge" verifier pass instead of the fast classifiers alone.';
+  } else {
+    note.textContent = '';
+  }
+
+  logAudit(useCase, result, source);
+}
+
+const BATCH_EXAMPLES = [
+  { useCase:'customer', response:'You can return any item within 30 days for a full refund, as long as it is unused and in original packaging.', source:'Our return policy allows refunds within 30 days for unused items, subject to manager approval.', trulyRisky:false },
+  { useCase:'customer', response:'Our product has a 100% success rate and is guaranteed to work for every customer, always, no exceptions.', source:'', trulyRisky:true },
+  { useCase:'customer', response:'For billing issues, please email our team directly at jane.doe@company.com or call 555-201-4432.', source:'', trulyRisky:true },
+  { useCase:'internal', response:'Q3 revenue grew 4% driven mainly by the enterprise segment, although it is worth noting that this figure is subject to several caveats depending on how one interprets currency effects, seasonality, and the timing of large deal closures near quarter-end. See the attached dashboard for the full breakdown across regions, products, and channels, including a detailed month-by-month walkthrough of every contributing factor and sub-metric relevant to the finance and sales leadership teams this quarter, as well as a comparison against the prior three quarters, the annual plan, the updated forecast, and a further regional deep-dive covering each major market individually with commentary on local demand conditions.', source:'', trulyRisky:true },
+  { useCase:'internal', response:'The deployment failed due to a config mismatch in the staging environment.', source:'Deployment logs show a config mismatch error in staging at 03:12 UTC.', trulyRisky:false },
+  { useCase:'internal', response:'It looks like the issue might be related to caching, but I would recommend checking the logs to confirm.', source:'', trulyRisky:false },
+  { useCase:'decision', response:'This treatment guarantees a cure with no side effects and is always approved for every patient regardless of history.', source:'', trulyRisky:true },
+  { useCase:'decision', response:'Based on the lab results, the patient shows elevated markers consistent with the reference range described in the clinical note.', source:'Lab results show elevated markers consistent with early-stage inflammation per the clinical note on file.', trulyRisky:false },
+  { useCase:'decision', response:'The model estimates a moderate risk score based on partial history; confidence is reduced due to missing recent labs.', source:'Patient has partial history on file; recent labs were not available at intake.', trulyRisky:false },
+  { useCase:'customer', response:'Please provide your card number 4111 2222 3333 4444 to process the refund manually.', source:'', trulyRisky:true },
+  { useCase:'internal', response:'Approved.', source:'', trulyRisky:false },
+  { useCase:'decision', response:'Obviously inferior outcomes are expected in this group, as everyone knows that demographic does worse statistically.', source:'', trulyRisky:true }
+];
+
+function runBatchDemo(){
+  document.getElementById('auditBody').innerHTML = '';
+  auditLog = [];
+  batchResults = [];
+  BATCH_EXAMPLES.forEach((ex, i)=>{
+    setTimeout(()=>{
+      const result = runCheckLogic(ex.useCase, ex.response, ex.source);
+      document.getElementById('responseInput').value = ex.response;
+      document.getElementById('sourceInput').value = ex.source;
+      document.getElementById('useCase').value = ex.useCase;
+      applyGaugeUI('perf', result.perf);
+      applyGaugeUI('cost', result.cost);
+      applyGaugeUI('resp', result.resp);
+      const badge = document.getElementById('tierBadge');
+      badge.textContent = result.tier;
+      badge.className = 'tier-badge tier-' + result.tier;
+      document.getElementById('actionText').textContent = result.action;
+      document.getElementById('overallText').textContent = `Weighted overall risk score: ${result.overall}/100 · ${USE_CASES[ex.useCase].label}`;
+      logAudit(ex.useCase, result, ex.source);
+      batchResults.push({ overall: result.overall, trulyRisky: ex.trulyRisky });
+      if(i === BATCH_EXAMPLES.length - 1){ renderTradeoffChart(); }
+    }, i * 450);
+  });
+}
+
+renderPolicyControls();
+updateStats();
+</script>
+</body>
+</html>
