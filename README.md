@@ -80,4 +80,4 @@ Being transparent about scope, since this is a proof-of-concept on illustrative 
 
 ## Team / Submission
 
-Accenture Innovation Challenge 2026 — Round 2 Prototype, Problem Track 1: ControlPlane.ai
+Team Muffin-Accenture Innovation Challenge 2026 — Round 2 Prototype, Problem Track 1: ControlPlane.ai
