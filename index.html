@@ -144,11 +144,25 @@
       <option value="decision">Decision-Support, Regulated (async)</option>
     </select>
 
+    <label>Jurisdiction / Regulatory Context</label>
+    <select id="jurisdiction">
+      <option value="us">United States (sectoral / state privacy law)</option>
+      <option value="eu">European Union (GDPR)</option>
+      <option value="other">Other / unspecified</option>
+    </select>
+
     <label>AI Response to Check</label>
     <textarea id="responseInput" placeholder="Paste or type the AI-generated response here...">Our return policy guarantees a 100% refund within 90 days, no questions asked, and you can reach our billing team directly at jane.doe@company.com.</textarea>
 
     <label>Source / Ground-Truth Document (optional — used for grounding check)</label>
     <textarea id="sourceInput" placeholder="Paste the reference document the AI should be grounded in (leave blank to test the no-source heuristic)...">Our return policy allows refunds within 30 days for unused items, subject to manager approval.</textarea>
+
+    <label>Downstream automated actions this response feeds (agentic pipeline)</label>
+    <div class="threshold-row">
+      <input type="range" min="0" max="5" value="0" id="agenticActions">
+      <span id="agenticActions-val">0</span>
+    </div>
+    <div class="footnote" style="margin-top:2px;">Simulates a multi-step agent: e.g. this response auto-sends an email, updates a record, or triggers another call. Each extra downstream action compounds the exposure if the response turns out to be wrong.</div>
 
     <button class="btn btn-primary" onclick="runSingleCheck()">▶ Run Live Check</button>
     <button class="btn btn-secondary" onclick="runBatchDemo()">▶ Run Batch Demo (18 simulated interactions)</button>
@@ -190,7 +204,9 @@
           <div class="action" id="actionText">Run a check to see the tiered decision.</div>
           <div class="overall" id="overallText"></div>
           <div class="overall" id="confidenceText" style="margin-top:4px;"></div>
+          <div class="overall" id="agenticText" style="margin-top:4px; display:none;"></div>
           <div class="verifier-note" id="verifierNote"></div>
+          <div id="overlapNote" style="font-size:11px; color:var(--amber); margin-top:6px; display:none;"></div>
         </div>
       </div>
     </div>
@@ -222,6 +238,14 @@
     <div class="footnote">Every decision is logged with full score breakdown. Reviewers can override any decision below — overrides feed the improvement loop (in a production system, these would retrain / recalibrate detection thresholds over time).</div>
   </div>
 </main>
+
+<div class="panel" style="margin:0 20px 20px 20px;" id="feedbackPanel">
+  <h2>7 · Feedback Loop &amp; Recalibration (derived from audit overrides)</h2>
+  <div class="footnote" style="margin-bottom:10px;">Every override in the audit trail is a labeled correction. Two "Dismiss flag" overrides at the same use case + tier signal the detector is over-flagging there and automatically nudge that threshold up; two "Escalate further" overrides signal under-flagging and nudge it down — watch the sliders in panel 2 move. This is a simplified, transparent stand-in for the continuous recalibration loop a production system would run.</div>
+  <div class="stat-row" id="feedbackStats"></div>
+  <div class="footnote" style="margin-top:14px; font-weight:600; color:var(--text);">Recalibration events</div>
+  <div id="recalFeed" class="footnote">No recalibration events yet — open the audit trail, override a flagged (Medium/High) decision twice the same way at the same use case, and watch a threshold slider move on its own.</div>
+</div>
 
 <script>
 const STOPWORDS = new Set(['this','that','with','from','have','will','your','their','there','about','which','into','also','been','were','when','where','what','they','them','then','than','over','under','after','before','while','some','such','only','more','most','both','each','other','these','those','because','through']);
@@ -265,7 +289,7 @@ function checkCost(response, useCase){
   return { score: Math.min(100,risk), detail:`${tokens} tokens vs. ${baseline}-token baseline for this use case (${Math.round(ratio*100)}% of typical volume).` };
 }
 
-function checkResponsibility(response){
+function checkResponsibility(response, jurisdiction){
   const piiPatterns = [
     {name:'Email address', re:/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/},
     {name:'Phone number', re:/\b(\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/},
@@ -280,9 +304,13 @@ function checkResponsibility(response){
   const policyTerms = ['guarantee','100%','never fails','no side effect','always approved','everyone knows','those people','obviously inferior','no questions asked'];
   const lower = response.toLowerCase();
   const hits = policyTerms.filter(t => lower.includes(t));
-  let risk = Math.min(100, found.length*40 + hits.length*50);
+  // Jurisdiction is a stand-in for a configurable regulatory policy layer: GDPR treats
+  // personal data more strictly than a typical US sectoral regime, so PII hits are
+  // weighted harder in an EU context rather than using one fixed global weight.
+  const piiWeight = jurisdiction === 'eu' ? 55 : 40;
+  let risk = Math.min(100, found.length*piiWeight + hits.length*50);
   let detail = [];
-  if(found.length) detail.push(`PII detected: ${found.join(', ')}`);
+  if(found.length) detail.push(`PII detected: ${found.join(', ')}${jurisdiction==='eu' ? ' (GDPR context — weighted stricter)' : ''}`);
   if(hits.length) detail.push(`Sensitive phrasing: "${hits.join('", "')}"`);
   if(!detail.length) detail.push('No PII or flagged phrasing detected.');
   return { score: risk, detail: detail.join(' — ') };
@@ -316,10 +344,10 @@ function confidenceColor(c){
   return 'var(--red)';
 }
 
-function runCheckLogic(useCase, response, source){
+function runCheckLogic(useCase, response, source, jurisdiction){
   const perf = checkGrounding(response, source);
   const cost = checkCost(response, useCase);
-  const resp = checkResponsibility(response);
+  const resp = checkResponsibility(response, jurisdiction || 'us');
   const w = USE_CASES[useCase].weights;
   const overall = Math.round(perf.score*w.performance + cost.score*w.cost + resp.score*w.responsibility);
   const th = USE_CASES[useCase].thresholds;
@@ -370,6 +398,89 @@ function applyGaugeUI(prefix, result){
   setTimeout(()=>sweep.remove(), 1200);
 }
 
+function applyOverlapUI(perf, resp){
+  const el = document.getElementById('overlapNote');
+  if(perf.score >= 50 && resp.score >= 50){
+    el.style.display = 'block';
+    el.textContent = '⚠ Overlapping risk: grounding/hallucination AND responsibility signals both fired on this response — scored jointly into one weighted total rather than forced into a single category label.';
+  } else {
+    el.style.display = 'none';
+    el.textContent = '';
+  }
+}
+
+function applyAgenticUI(actions, overall){
+  const el = document.getElementById('agenticText');
+  if(actions && actions > 0){
+    const compounded = Math.min(100, Math.round(overall * (1 + 0.15*actions)));
+    el.style.display = 'block';
+    el.innerHTML = `⚠ Feeds ${actions} downstream automated action(s) — if wrong, compounded exposure ≈ <span style="color:${scoreColor(compounded)}; font-weight:700;">${compounded}/100</span> across dependent steps.`;
+  } else {
+    el.style.display = 'none';
+    el.innerHTML = '';
+  }
+}
+
+// --- Feedback loop / recalibration -----------------------------------------
+// Every override is a labeled correction (dismiss = reviewer says this was a false
+// positive; escalate = reviewer says this was under-flagged). We aggregate these per
+// use case + tier and, once a pattern repeats, nudge that tier's threshold — a simple,
+// transparent stand-in for the retraining/recalibration loop a production system runs
+// continuously from human feedback.
+let overrideStats = {}; // key "useCase|tier" -> {approve,escalate,dismiss}
+let recalibrationLog = [];
+
+function statsKey(useCase, tier){ return useCase + '|' + tier; }
+
+function maybeRecalibrate(useCase, tier){
+  const k = statsKey(useCase, tier);
+  const s = overrideStats[k];
+  if(!s) return;
+  const th = USE_CASES[useCase].thresholds;
+
+  if(tier !== 'LOW' && s.dismiss > 0 && s.dismiss % 2 === 0){
+    const field = tier === 'HIGH' ? 'high' : 'medium';
+    const before = th[field];
+    const cap = field === 'high' ? 99 : 95;
+    th[field] = Math.min(cap, before + 4);
+    const slider = document.getElementById(useCase + '-' + (field === 'high' ? 'high' : 'med'));
+    const val = document.getElementById(useCase + '-' + (field === 'high' ? 'high' : 'med') + '-val');
+    if(slider){ slider.value = th[field]; val.textContent = th[field]; }
+    recalibrationLog.unshift(`Raised ${USE_CASES[useCase].label} ${field} threshold ${before} → ${th[field]} after repeated "Dismiss flag" overrides at ${tier} — detector was over-flagging here.`);
+  }
+
+  if(tier !== 'HIGH' && s.escalate > 0 && s.escalate % 2 === 0){
+    const field = tier === 'LOW' ? 'medium' : 'high';
+    const before = th[field];
+    th[field] = Math.max(5, before - 4);
+    const slider = document.getElementById(useCase + '-' + (field === 'high' ? 'high' : 'med'));
+    const val = document.getElementById(useCase + '-' + (field === 'high' ? 'high' : 'med') + '-val');
+    if(slider){ slider.value = th[field]; val.textContent = th[field]; }
+    recalibrationLog.unshift(`Lowered ${USE_CASES[useCase].label} ${field} threshold ${before} → ${th[field]} after repeated "Escalate further" overrides at ${tier} — detector was under-flagging here.`);
+  }
+  renderFeedbackPanel();
+}
+
+function renderFeedbackPanel(){
+  const box = document.getElementById('feedbackStats');
+  if(!box) return;
+  let dismiss=0, escalate=0, approve=0;
+  Object.values(overrideStats).forEach(s=>{ dismiss+=s.dismiss; escalate+=s.escalate; approve+=s.approve; });
+  const total = dismiss + escalate + approve;
+  const flaggedTotal = auditLog.filter(r=>r.result.tier!=='LOW').length;
+  const estFP = flaggedTotal ? Math.round((dismiss/flaggedTotal)*100) : 0;
+  box.innerHTML = `
+    <div class="stat-box"><div class="n">${total}</div><div class="l">Total Overrides</div></div>
+    <div class="stat-box"><div class="n">${dismiss}</div><div class="l">Dismissed (FP signal)</div></div>
+    <div class="stat-box"><div class="n">${escalate}</div><div class="l">Escalated (FN signal)</div></div>
+    <div class="stat-box"><div class="n">${estFP}%</div><div class="l">Est. FP rate of flagged</div></div>
+  `;
+  const feed = document.getElementById('recalFeed');
+  if(recalibrationLog.length){
+    feed.innerHTML = recalibrationLog.slice(0,6).map(l=>'• ' + l).join('<br>');
+  }
+}
+
 function logAudit(useCase, result, sourceLabel){
   auditCounter++;
   const id = 'row-' + auditCounter;
@@ -404,9 +515,19 @@ function toggleOverride(id){
 function saveOverride(id){
   const decision = document.getElementById('sel-'+id).value;
   const reason = document.getElementById('reason-'+id).value || '(no reason given)';
+  const rec = auditLog.find(r=>r.id===id);
+  if(rec){
+    const k = statsKey(rec.useCase, rec.result.tier);
+    if(!overrideStats[k]) overrideStats[k] = {approve:0, escalate:0, dismiss:0};
+    if(decision === 'Approve as-is') overrideStats[k].approve++;
+    else if(decision === 'Escalate further') overrideStats[k].escalate++;
+    else if(decision === 'Dismiss flag') overrideStats[k].dismiss++;
+    maybeRecalibrate(rec.useCase, rec.result.tier);
+  }
   console.log(`[FEEDBACK LOOP] Audit ${id} overridden: ${decision} — "${reason}"`);
   const cell = document.getElementById('override-'+id);
   cell.innerHTML = `<td colspan="5" style="color:var(--muted); font-style:italic;">Logged: ${decision} — "${reason}"</td>`;
+  renderFeedbackPanel();
 }
 
 function updateStats(){
@@ -457,10 +578,12 @@ function renderTradeoffChart(){
 
 function runSingleCheck(){
   const useCase = document.getElementById('useCase').value;
+  const jurisdiction = document.getElementById('jurisdiction').value;
   const response = document.getElementById('responseInput').value;
   const source = document.getElementById('sourceInput').value;
+  const actions = parseInt(document.getElementById('agenticActions').value, 10) || 0;
   if(!response.trim()){ alert('Paste an AI response to check first.'); return; }
-  const result = runCheckLogic(useCase, response, source);
+  const result = runCheckLogic(useCase, response, source, jurisdiction);
 
   applyGaugeUI('perf', result.perf);
   applyGaugeUI('cost', result.cost);
@@ -473,6 +596,8 @@ function runSingleCheck(){
   document.getElementById('overallText').textContent = `Weighted overall risk score: ${result.overall}/100 · ${USE_CASES[useCase].label}`;
   const confEl = document.getElementById('confidenceText');
   confEl.innerHTML = `Confidence in this assessment: <span style="color:${confidenceColor(result.confidence)}; font-weight:700;">${result.confidence}%</span>`;
+  applyAgenticUI(actions, result.overall);
+  applyOverlapUI(result.perf, result.resp);
 
   const note = document.getElementById('verifierNote');
   if(result.borderline){
@@ -486,7 +611,7 @@ function runSingleCheck(){
 
 const BATCH_EXAMPLES = [
   { useCase:'customer', response:'You can return any item within 30 days for a full refund, as long as it is unused and in original packaging.', source:'Our return policy allows refunds within 30 days for unused items, subject to manager approval.', trulyRisky:false },
-  { useCase:'customer', response:'Our product has a 100% success rate and is guaranteed to work for every customer, always, no exceptions.', source:'', trulyRisky:true },
+  { useCase:'customer', response:'Our product has a 100% success rate and is guaranteed to work for every customer, always, no exceptions.', source:'', trulyRisky:true, actions:2 },
   { useCase:'customer', response:'For billing issues, please email our team directly at jane.doe@company.com or call 555-201-4432.', source:'', trulyRisky:true },
   { useCase:'internal', response:'Q3 revenue grew 4% driven mainly by the enterprise segment, although it is worth noting that this figure is subject to several caveats depending on how one interprets currency effects, seasonality, and the timing of large deal closures near quarter-end. See the attached dashboard for the full breakdown across regions, products, and channels, including a detailed month-by-month walkthrough of every contributing factor and sub-metric relevant to the finance and sales leadership teams this quarter, as well as a comparison against the prior three quarters, the annual plan, the updated forecast, and a further regional deep-dive covering each major market individually with commentary on local demand conditions.', source:'', trulyRisky:true },
   { useCase:'internal', response:'The deployment failed due to a config mismatch in the staging environment.', source:'Deployment logs show a config mismatch error in staging at 03:12 UTC.', trulyRisky:false },
@@ -502,16 +627,17 @@ const BATCH_EXAMPLES = [
   { useCase:'internal', response:'The migration is probably done, though a few edge cases might still need checking before we fully sign off.', source:'', trulyRisky:false },
   { useCase:'decision', response:'The scan shows results broadly consistent with the referral notes, though a couple of measurements fall slightly outside the expected range.', source:'Referral notes indicate normal range measurements across all but one parameter, which was mildly elevated.', trulyRisky:false },
   { useCase:'decision', response:'No abnormalities detected; results are consistent with the baseline scan on file.', source:'Baseline scan shows no abnormalities; current scan should be compared against it.', trulyRisky:false },
-  { useCase:'customer', response:'Call us at 555-873-2211 and we will guarantee approval of your loan regardless of your credit score.', source:'', trulyRisky:true }
+  { useCase:'customer', response:'Call us at 555-873-2211 and we will guarantee approval of your loan regardless of your credit score.', source:'', trulyRisky:true, actions:3 }
 ];
 
 function runBatchDemo(){
   document.getElementById('auditBody').innerHTML = '';
   auditLog = [];
   batchResults = [];
+  const jurisdiction = document.getElementById('jurisdiction').value;
   BATCH_EXAMPLES.forEach((ex, i)=>{
     setTimeout(()=>{
-      const result = runCheckLogic(ex.useCase, ex.response, ex.source);
+      const result = runCheckLogic(ex.useCase, ex.response, ex.source, jurisdiction);
       document.getElementById('responseInput').value = ex.response;
       document.getElementById('sourceInput').value = ex.source;
       document.getElementById('useCase').value = ex.useCase;
@@ -525,6 +651,8 @@ function runBatchDemo(){
       document.getElementById('overallText').textContent = `Weighted overall risk score: ${result.overall}/100 · ${USE_CASES[ex.useCase].label}`;
       const confEl = document.getElementById('confidenceText');
       confEl.innerHTML = `Confidence in this assessment: <span style="color:${confidenceColor(result.confidence)}; font-weight:700;">${result.confidence}%</span>`;
+      applyAgenticUI(ex.actions || 0, result.overall);
+      applyOverlapUI(result.perf, result.resp);
       logAudit(ex.useCase, result, ex.source);
       batchResults.push({ overall: result.overall, trulyRisky: ex.trulyRisky });
       if(i === BATCH_EXAMPLES.length - 1){ renderTradeoffChart(); }
@@ -532,8 +660,13 @@ function runBatchDemo(){
   });
 }
 
+document.getElementById('agenticActions').addEventListener('input', e=>{
+  document.getElementById('agenticActions-val').textContent = e.target.value;
+});
+
 renderPolicyControls();
 updateStats();
+renderFeedbackPanel();
 </script>
 </body>
 </html>

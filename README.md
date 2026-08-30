@@ -16,6 +16,9 @@ Open `index.html` in any browser — no install, no API key, no backend required
 3. **Check the confidence indicator** — every check reports a confidence percentage alongside its risk score, separate from the risk level itself. Confidence drops when there's no source to verify against, when the score sits right on a decision-tier boundary, or when the three detectors disagree sharply with each other.
 4. **Adjust the governance sliders** — change the medium/high risk thresholds per use case live and watch the same detection scores produce different tiered actions.
 5. **Override a decision** — every row in the audit trail can be overridden with a reason, simulating the human-in-the-loop feedback signal a production system would use to recalibrate.
+6. **Watch the feedback loop close itself** — override two similar flagged decisions the same way (e.g. "Dismiss flag" twice on the same use case), then look at panel 2: the relevant threshold slider moves on its own, and panel 7 logs why. This turns "overrides feed the improvement loop" from a caption into an actual mechanism.
+7. **Set downstream automated actions** — the slider under the response box simulates an agentic pipeline (e.g. this response triggers an email send or a record update). With actions > 0, the decision card shows a compounded exposure estimate, making multi-turn/agentic risk visible rather than treating every response as independent.
+8. **Switch jurisdiction** — toggling US / EU changes how hard PII hits are weighted (GDPR context is stricter), standing in for a jurisdiction-aware policy layer.
 
 ## Why this design
 
@@ -29,8 +32,11 @@ The brief's real-world complexities directly shaped the architecture:
 | Communicating uncertainty, not just a score | Every check reports a confidence percentage alongside its risk tier — separate from the risk level itself. Confidence drops when there's no source to verify against, when the score sits right on a decision-tier boundary, or when the three detectors disagree sharply |
 | Over-flagging vs under-flagging tradeoff | The "Alert-Fatigue Tradeoff Simulator" sweeps the flagging threshold across the batch results and plots false positives against false negatives, making the tuning tradeoff visible and explicit rather than solving it away |
 | Enterprises consume models via API, not owning them | All checks work purely on the *input/output text*, never on model internals — this is designed to sit outside the model as middleware |
-| Regulatory / policy differences by geography and use case | The threshold sliders are a stand-in for a configurable policy layer — same detectors, different governance per deployment |
-| Feedback loops | The audit trail's override mechanism logs every human correction, which in production would feed back into recalibrating detection thresholds |
+| Regulatory / policy differences by geography and use case | The threshold sliders are a stand-in for a configurable policy layer — same detectors, different governance per deployment. A jurisdiction toggle (US / EU) additionally re-weights PII detections stricter under a GDPR context |
+| Feedback loops | The audit trail's override mechanism logs every human correction. This is no longer just a caption: repeated "Dismiss flag" overrides at a use case + tier automatically raise that threshold, and repeated "Escalate further" overrides lower it — visible live in the governance sliders and logged in the new "Feedback Loop & Recalibration" panel |
+| False positive / negative rate reporting to a skeptical stakeholder | The same override log is reused to compute a live "estimated false-positive rate of flagged responses" stat (dismissed overrides ÷ total flagged), alongside the batch-level alert-fatigue tradeoff chart |
+| Multi-turn / agentic use cases compound risk across turns | A "downstream automated actions" control lets a response be marked as feeding N further automated steps; the decision card then shows a compounded exposure estimate reflecting that one bad output can propagate |
+| Bias / hallucination / privacy risks overlap in practice | When a response trips both the Performance and Responsibility detectors past a threshold, the UI now surfaces an explicit "overlapping risk" note rather than silently picking one label, making the scoring philosophy (joint weighting, not single-category classification) visible in the demo itself |
 
 ## Architecture
 
