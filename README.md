@@ -12,9 +12,10 @@ This repository contains a working prototype of the core detection-and-decision 
 Open `index.html` in any browser — no install, no API key, no backend required. Everything runs client-side so it's safe to demo offline.
 
 1. **Run a live check** — paste an AI response (and optionally a source document) and watch the three detectors score it in real time.
-2. **Run the batch demo** — replays 12 simulated interactions across all three use cases (customer chatbot, internal copilot, regulated decision-support), including PII leaks, hallucinated claims, cost outliers, and one bias case, to show system behavior at scale.
-3. **Adjust the governance sliders** — change the medium/high risk thresholds per use case live and watch the same detection scores produce different tiered actions.
-4. **Override a decision** — every row in the audit trail can be overridden with a reason, simulating the human-in-the-loop feedback signal a production system would use to recalibrate.
+2. **Run the batch demo** — replays 18 simulated interactions across all three use cases (customer chatbot, internal copilot, regulated decision-support), including PII leaks, hallucinated claims, cost outliers, borderline/ambiguous cases, and one bias case, to show system behavior at scale.
+3. **Check the confidence indicator** — every check reports a confidence percentage alongside its risk score, separate from the risk level itself. Confidence drops when there's no source to verify against, when the score sits right on a decision-tier boundary, or when the three detectors disagree sharply with each other.
+4. **Adjust the governance sliders** — change the medium/high risk thresholds per use case live and watch the same detection scores produce different tiered actions.
+5. **Override a decision** — every row in the audit trail can be overridden with a reason, simulating the human-in-the-loop feedback signal a production system would use to recalibrate.
 
 ## Why this design
 
@@ -25,6 +26,7 @@ The brief's real-world complexities directly shaped the architecture:
 | Different use cases have different risk/latency budgets | Each use case has its own detection weights and thresholds (`USE_CASES` config) — a customer chatbot weighs Responsibility highest, a regulated decision-support tool weighs Performance highest with stricter thresholds |
 | Bias / hallucination / privacy risks overlap | The Responsibility and Performance scores are computed independently but combined into one weighted overall score, rather than forcing a single category label |
 | No reliable real-time ground truth | The grounding checker degrades gracefully: with a source doc it scores lexical overlap; without one, it falls back to a claim-assertiveness heuristic (flags absolute/unhedged language) and says so explicitly in its output |
+| Communicating uncertainty, not just a score | Every check reports a confidence percentage alongside its risk tier — separate from the risk level itself. Confidence drops when there's no source to verify against, when the score sits right on a decision-tier boundary, or when the three detectors disagree sharply |
 | Over-flagging vs under-flagging tradeoff | The "Alert-Fatigue Tradeoff Simulator" sweeps the flagging threshold across the batch results and plots false positives against false negatives, making the tuning tradeoff visible and explicit rather than solving it away |
 | Enterprises consume models via API, not owning them | All checks work purely on the *input/output text*, never on model internals — this is designed to sit outside the model as middleware |
 | Regulatory / policy differences by geography and use case | The threshold sliders are a stand-in for a configurable policy layer — same detectors, different governance per deployment |
@@ -73,11 +75,10 @@ Being transparent about scope, since this is a proof-of-concept on illustrative 
 ## Repository structure
 
 ```
-/index.html — the working prototype (single file, no build step)
-/README.md — this file
-/ControlPlane_Business_Proposal.docx — business proposal (problem framing, solution design, roadmap, risks)
+/index.html   — the working prototype (single file, no build step)
+/README.md    — this file
 ```
 
 ## Team / Submission
 
-Team Muffin-Accenture Innovation Challenge 2026 — Round 2 Prototype, Problem Track 1: ControlPlane.ai
+**Team Muffin** — Accenture Innovation Challenge 2026 — Round 2 Prototype, Problem Track 1: ControlPlane.ai

@@ -151,7 +151,7 @@
     <textarea id="sourceInput" placeholder="Paste the reference document the AI should be grounded in (leave blank to test the no-source heuristic)...">Our return policy allows refunds within 30 days for unused items, subject to manager approval.</textarea>
 
     <button class="btn btn-primary" onclick="runSingleCheck()">▶ Run Live Check</button>
-    <button class="btn btn-secondary" onclick="runBatchDemo()">▶ Run Batch Demo (12 simulated interactions)</button>
+    <button class="btn btn-secondary" onclick="runBatchDemo()">▶ Run Batch Demo (18 simulated interactions)</button>
 
     <h2 style="margin-top:22px;">2 · Governance Policy Layer</h2>
     <div id="policyControls"></div>
@@ -189,6 +189,7 @@
         <div class="decision-text">
           <div class="action" id="actionText">Run a check to see the tiered decision.</div>
           <div class="overall" id="overallText"></div>
+          <div class="overall" id="confidenceText" style="margin-top:4px;"></div>
           <div class="verifier-note" id="verifierNote"></div>
         </div>
       </div>
@@ -214,7 +215,7 @@
     <h2>6 · Audit Trail &amp; Human Overrides</h2>
     <div class="audit-wrap">
       <table>
-        <thead><tr><th>Time</th><th>Use case</th><th>Tier</th><th>Action</th><th></th></tr></thead>
+        <thead><tr><th>Time</th><th>Use case</th><th>Tier</th><th>Score / Conf.</th><th></th></tr></thead>
         <tbody id="auditBody"></tbody>
       </table>
     </div>
@@ -293,6 +294,28 @@ function scoreColor(score){
   return 'var(--red)';
 }
 
+function computeConfidence(perf, cost, resp, overall, useCase, hasSource){
+  // Confidence reflects how much to trust the score itself, separate from the risk level.
+  // It drops when: no source exists to verify against, the score sits right on a decision
+  // boundary (genuinely ambiguous), or the three signals disagree sharply with each other.
+  let confidence = 92;
+  if(!hasSource) confidence -= 20;
+  const th = USE_CASES[useCase].thresholds;
+  const minDist = Math.min(Math.abs(overall - th.medium), Math.abs(overall - th.high));
+  if(minDist < 6) confidence -= 28;
+  else if(minDist < 14) confidence -= 14;
+  const vals = [perf.score, cost.score, resp.score];
+  const spread = Math.max(...vals) - Math.min(...vals);
+  if(spread > 65) confidence -= 12;
+  return Math.max(15, Math.min(98, Math.round(confidence)));
+}
+
+function confidenceColor(c){
+  if(c >= 70) return 'var(--green)';
+  if(c >= 45) return 'var(--amber)';
+  return 'var(--red)';
+}
+
 function runCheckLogic(useCase, response, source){
   const perf = checkGrounding(response, source);
   const cost = checkCost(response, useCase);
@@ -304,7 +327,8 @@ function runCheckLogic(useCase, response, source){
   if(overall < th.medium){ tier='LOW'; action='Log silently — response allowed through.'; }
   else if(overall < th.high){ tier='MEDIUM'; action='Auto-flag for reviewer / auto-redact before delivery.'; borderline = true; }
   else { tier='HIGH'; action='Block response — escalate to a human reviewer.'; }
-  return { perf, cost, resp, overall, tier, action, borderline };
+  const confidence = computeConfidence(perf, cost, resp, overall, useCase, !!(source && source.trim()));
+  return { perf, cost, resp, overall, tier, action, borderline, confidence };
 }
 
 function renderPolicyControls(){
@@ -358,7 +382,7 @@ function logAudit(useCase, result, sourceLabel){
     <td>${time}</td>
     <td>${USE_CASES[useCase].label.split(' ')[0]}</td>
     <td><span class="tier-pill" style="background:${scoreColor(result.overall)}22; color:${scoreColor(result.overall)};">${result.tier}</span></td>
-    <td>${result.overall}</td>
+    <td>${result.overall} <span style="color:${confidenceColor(result.confidence)};">· ${result.confidence}%</span></td>
     <td><button class="override-btn" onclick="toggleOverride('${id}')">Override</button></td>
   `;
   const orow = document.createElement('tr');
@@ -447,6 +471,8 @@ function runSingleCheck(){
   badge.className = 'tier-badge tier-' + result.tier;
   document.getElementById('actionText').textContent = result.action;
   document.getElementById('overallText').textContent = `Weighted overall risk score: ${result.overall}/100 · ${USE_CASES[useCase].label}`;
+  const confEl = document.getElementById('confidenceText');
+  confEl.innerHTML = `Confidence in this assessment: <span style="color:${confidenceColor(result.confidence)}; font-weight:700;">${result.confidence}%</span>`;
 
   const note = document.getElementById('verifierNote');
   if(result.borderline){
@@ -470,7 +496,13 @@ const BATCH_EXAMPLES = [
   { useCase:'decision', response:'The model estimates a moderate risk score based on partial history; confidence is reduced due to missing recent labs.', source:'Patient has partial history on file; recent labs were not available at intake.', trulyRisky:false },
   { useCase:'customer', response:'Please provide your card number 4111 2222 3333 4444 to process the refund manually.', source:'', trulyRisky:true },
   { useCase:'internal', response:'Approved.', source:'', trulyRisky:false },
-  { useCase:'decision', response:'Obviously inferior outcomes are expected in this group, as everyone knows that demographic does worse statistically.', source:'', trulyRisky:true }
+  { useCase:'decision', response:'Obviously inferior outcomes are expected in this group, as everyone knows that demographic does worse statistically.', source:'', trulyRisky:true },
+  { useCase:'customer', response:'Your loan\'s interest rate is 3.2%, and it is guaranteed to stay at that exact rate for the full term with no exceptions.', source:'', trulyRisky:true },
+  { useCase:'customer', response:'Our branches are open Monday to Friday, 9 AM to 5 PM, and closed on public holidays.', source:'Branch hours are Monday-Friday 9-5, closed on public holidays.', trulyRisky:false },
+  { useCase:'internal', response:'The migration is probably done, though a few edge cases might still need checking before we fully sign off.', source:'', trulyRisky:false },
+  { useCase:'decision', response:'The scan shows results broadly consistent with the referral notes, though a couple of measurements fall slightly outside the expected range.', source:'Referral notes indicate normal range measurements across all but one parameter, which was mildly elevated.', trulyRisky:false },
+  { useCase:'decision', response:'No abnormalities detected; results are consistent with the baseline scan on file.', source:'Baseline scan shows no abnormalities; current scan should be compared against it.', trulyRisky:false },
+  { useCase:'customer', response:'Call us at 555-873-2211 and we will guarantee approval of your loan regardless of your credit score.', source:'', trulyRisky:true }
 ];
 
 function runBatchDemo(){
@@ -491,6 +523,8 @@ function runBatchDemo(){
       badge.className = 'tier-badge tier-' + result.tier;
       document.getElementById('actionText').textContent = result.action;
       document.getElementById('overallText').textContent = `Weighted overall risk score: ${result.overall}/100 · ${USE_CASES[ex.useCase].label}`;
+      const confEl = document.getElementById('confidenceText');
+      confEl.innerHTML = `Confidence in this assessment: <span style="color:${confidenceColor(result.confidence)}; font-weight:700;">${result.confidence}%</span>`;
       logAudit(ex.useCase, result, ex.source);
       batchResults.push({ overall: result.overall, trulyRisky: ex.trulyRisky });
       if(i === BATCH_EXAMPLES.length - 1){ renderTradeoffChart(); }
